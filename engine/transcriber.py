@@ -44,12 +44,15 @@ class Transcriber:
             
         try:
             # Transcribe with faster-whisper
-            segments, info = self.model.transcribe(
-                audio, 
-                language=self.config.language, 
-                beam_size=5,
-                vad_filter=False # Already handled in recorder.py
-            )
+            kwargs = {
+                "language": self.config.language,
+                "beam_size": 5,
+                "vad_filter": False # Already handled in recorder.py
+            }
+            if self.config.initial_prompt and self.config.initial_prompt.strip():
+                kwargs["initial_prompt"] = self.config.initial_prompt.strip()
+
+            segments, info = self.model.transcribe(audio, **kwargs)
             
             # Collect and strip results
             text = " ".join(seg.text.strip() for seg in segments).strip()

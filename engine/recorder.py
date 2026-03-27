@@ -24,6 +24,26 @@ class AudioRecorder:
             logging.error(f"Failed to load Silero VAD: {e}")
             self.model = None
 
+    def normalize_audio(self, chunk: np.ndarray, target_dBFS: float = -20.0) -> np.ndarray:
+        # Compute RMS
+        rms = np.sqrt(np.mean(chunk**2))
+        if rms < 1e-10:  # Silence
+            return chunk
+            
+        target_rms = 10 ** (target_dBFS / 20.0)
+        
+        # calculate gain
+        gain = target_rms / rms
+        
+        # Apply user config gain boost multiplier
+        gain *= self.config.gain_boost
+        
+        # Apply gain
+        normalized = chunk * gain
+        
+        # Clip to valid float32 range [-1.0, 1.0]
+        return np.clip(normalized, -1.0, 1.0)
+
     def _audio_callback(self, indata, frames, time, status):
         if status:
             logging.warning(f"Audio status: {status}")
@@ -89,5 +109,8 @@ class AudioRecorder:
                 # Fallback: return original audio if VAD fails
                 pass
                 
+        # Apply RMS Normalization with optional user gain boost
+        audio = self.normalize_audio(audio)
+        
         logging.info(f"Recording stopped. Duration: {len(audio)/self.config.sample_rate:.2f}s")
         return audio

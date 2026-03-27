@@ -9,6 +9,8 @@ from config import Config
 from engine.recorder import AudioRecorder
 from engine.transcriber import Transcriber
 from engine.injector import TextInjector
+from engine.history import HistoryLogger
+from engine.app_watcher import AppWatcher
 from ui.overlay import StatusOverlay
 from ui.tray import TrayIcon
 from dataclasses import dataclass
@@ -33,8 +35,14 @@ class DictationApp:
         # Use an executor for non-blocking transcription
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         
+        self.history = HistoryLogger()
+        self.app_watcher = AppWatcher(self.config, self._on_profile_change)
+        
         # Initialize UI tray (will run in main thread)
         self.tray = TrayIcon(self.config, self.toggle_dictation, self.quit)
+        
+        # Start app watcher
+        self.app_watcher.start()
         
         # Model loading (background thread)
         threading.Thread(target=self.transcriber.load_model, daemon=True).start()
@@ -47,6 +55,11 @@ class DictationApp:
             logging.info(f"Main: Registered global hotkey: {kb_hotkey}")
         except Exception as e:
             logging.error(f"Main: Failed to register hotkey: {e}")
+
+    def _on_profile_change(self, profile_name: str):
+        """Callback for when AppWatcher switches vocabulary profiles."""
+        if hasattr(self, 'tray') and self.tray:
+            self.tray.set_state(self.state.status)
 
     def toggle_dictation(self):
         """Global hotkey handler."""
@@ -96,6 +109,7 @@ class DictationApp:
             text = self.transcriber.transcribe(audio)
             
             if text:
+                self.history.log(text)
                 success = self.injector.inject(text)
                 if success:
                     self.overlay.show_success(text)
@@ -136,6 +150,8 @@ class DictationApp:
         self.overlay.hide()
         if self.tray:
             self.tray.stop()
+        if hasattr(self, 'app_watcher'):
+            self.app_watcher.stop()
         self.executor.shutdown(wait=False)
         sys.exit(0)
 
