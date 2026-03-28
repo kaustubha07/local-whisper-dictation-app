@@ -39,7 +39,13 @@ class DictationApp:
         self.app_watcher = AppWatcher(self.config, self._on_profile_change)
         
         # Initialize UI tray (will run in main thread)
-        self.tray = TrayIcon(self.config, self.toggle_dictation, self.quit)
+        self.tray = TrayIcon(
+            self.config,
+            self.toggle_dictation,
+            self.quit,
+            on_hotkey_change=self._register_hotkey,
+            on_restart=self.restart
+        )
         
         # Start app watcher
         self.app_watcher.start()
@@ -47,14 +53,8 @@ class DictationApp:
         # Model loading (background thread)
         threading.Thread(target=self.transcriber.load_model, daemon=True).start()
         
-        # Global hotkey listener (Using 'keyboard' library for better Windows reliability)
-        try:
-            # Convert pynput format <ctrl>+<alt>+<space> to keyboard format ctrl+alt+space
-            kb_hotkey = self.config.hotkey.replace("<", "").replace(">", "")
-            keyboard.add_hotkey(kb_hotkey, self.toggle_dictation, suppress=True)
-            logging.info(f"Main: Registered global hotkey: {kb_hotkey}")
-        except Exception as e:
-            logging.error(f"Main: Failed to register hotkey: {e}")
+        # Initial hotkey registration
+        self._register_hotkey(self.config.hotkey)
 
     def _on_profile_change(self, profile_name: str):
         """Callback for when AppWatcher switches vocabulary profiles."""
@@ -132,6 +132,17 @@ class DictationApp:
             self.tray.set_state("idle")
             self.overlay.show_error(msg)
 
+    def _register_hotkey(self, hotkey_str: str):
+        """Unregister old hotkey and register the new one. Safe to call at runtime."""
+        try:
+            keyboard.unhook_all()  # Clear previous hotkey bindings
+            # Normalise: strip pynput-style angle brackets if user typed them
+            clean = hotkey_str.replace("<", "").replace(">", "").strip()
+            keyboard.add_hotkey(clean, self.toggle_dictation, suppress=True)
+            logging.info(f"Main: Registered hotkey: {clean}")
+        except Exception as e:
+            logging.error(f"Main: Failed to register hotkey '{hotkey_str}': {e}")
+
     def run(self):
         """Run the application tray icon (blocking)."""
         logging.info("Dictation App is running...")
@@ -139,6 +150,25 @@ class DictationApp:
             self.tray.run()
         except KeyboardInterrupt:
             self.quit()
+
+    def restart(self, icon=None, item=None):
+        """Clean restart — works reliably on Windows."""
+        import subprocess
+        logging.info("Main: Restarting app...")
+        try:
+            keyboard.unhook_all()
+        except:
+            pass
+        self.overlay.hide()
+        if self.tray:
+            self.tray.stop()
+        if hasattr(self, 'app_watcher'):
+            self.app_watcher.stop()
+        self.executor.shutdown(wait=False)
+        
+        # Launch new instance and exit current one
+        subprocess.Popen([sys.executable] + sys.argv)
+        sys.exit(0)
 
     def quit(self, icon=None, item=None):
         """Clean shutdown."""

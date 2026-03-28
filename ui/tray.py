@@ -8,12 +8,22 @@ from config import Config
 from typing import Callable, Optional
 
 class TrayIcon:
-    def __init__(self, config: Config, on_toggle: Callable, on_quit: Callable):
+    def __init__(
+        self,
+        config: Config,
+        on_toggle: Callable,
+        on_quit: Callable,
+        on_hotkey_change: Optional[Callable] = None,
+        on_restart: Optional[Callable] = None,
+    ):
         self.config = config
         self.on_toggle = on_toggle
         self.on_quit = on_quit
+        self.on_hotkey_change = on_hotkey_change
+        self.on_restart = on_restart
         self.icon: Optional[pystray.Icon] = None
         self.state = "idle"
+        self._settings_open = False  # Track if settings window is open
         
         # Create initial icon
         self.icon = pystray.Icon(
@@ -58,6 +68,7 @@ class TrayIcon:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Settings", self._open_settings),
             pystray.MenuItem("View History", self._open_history),
+            pystray.MenuItem("Restart", self.on_restart) if self.on_restart else None,
             pystray.MenuItem("Quit", self.on_quit)
         )
 
@@ -73,7 +84,11 @@ class TrayIcon:
         self.icon.menu = self._create_menu()
 
     def _open_settings(self):
-        """Open settings window in a new thread to avoid blocking."""
+        """Open settings window in a new thread if not already open."""
+        if getattr(self, '_settings_open', False):
+            logging.info("Tray: Settings window already open.")
+            return
+        self._settings_open = True
         threading.Thread(target=self._show_settings_window, daemon=True).start()
 
     def _open_history(self):
@@ -130,18 +145,20 @@ class TrayIcon:
         
         # Language
         ttk.Label(main_frame, text="Language (en, hi, etc.):").grid(row=1, column=0, sticky=tk.W)
-        lang_var = tk.StringVar(value=self.config.language)
-        ttk.Entry(main_frame, textvariable=lang_var).grid(row=1, column=1, sticky=tk.EW)
+        lang_entry = ttk.Entry(main_frame)
+        lang_entry.grid(row=1, column=1, sticky=tk.EW)
+        lang_entry.insert(0, self.config.language)
         
         # Hotkey
-        ttk.Label(main_frame, text="Hotkey (pynput format):").grid(row=2, column=0, sticky=tk.W)
-        hotkey_var = tk.StringVar(value=self.config.hotkey)
-        ttk.Entry(main_frame, textvariable=hotkey_var).grid(row=2, column=1, sticky=tk.EW)
+        ttk.Label(main_frame, text="Hotkey (e.g. ctrl+alt+space):").grid(row=2, column=0, sticky=tk.W)
+        hotkey_entry = ttk.Entry(main_frame)
+        hotkey_entry.grid(row=2, column=1, sticky=tk.EW)
+        hotkey_entry.insert(0, self.config.hotkey)
         
         # Device
         ttk.Label(main_frame, text="Device:").grid(row=3, column=0, sticky=tk.W)
-        device_var = tk.StringVar(value=self.config.device)
-        device_combo = ttk.Combobox(main_frame, textvariable=device_var, values=["cpu", "cuda"])
+        device_combo = ttk.Combobox(main_frame, values=["cpu", "cuda"])
+        device_combo.set(self.config.device)
         device_combo.grid(row=3, column=1, sticky=tk.EW)
         
         # Options
@@ -156,20 +173,20 @@ class TrayIcon:
         
         # Model Size
         ttk.Label(main_frame, text="Model Size:").grid(row=7, column=0, sticky=tk.W)
-        model_var = tk.StringVar(value=self.config.model_size)
-        model_combo = ttk.Combobox(main_frame, textvariable=model_var, values=["tiny", "base", "small", "medium"])
+        model_combo = ttk.Combobox(main_frame, values=["tiny", "base", "small", "medium"])
+        model_combo.set(self.config.model_size)
         model_combo.grid(row=7, column=1, sticky=tk.EW)
         
         # Initial Prompt
         ttk.Label(main_frame, text="Initial Prompt:").grid(row=8, column=0, sticky=tk.W)
-        prompt_var = tk.StringVar(value=self.config.initial_prompt)
-        prompt_entry = ttk.Entry(main_frame, textvariable=prompt_var, width=25)
+        prompt_entry = ttk.Entry(main_frame, width=25)
         prompt_entry.grid(row=8, column=1, sticky=tk.EW)
+        prompt_entry.insert(0, self.config.initial_prompt)
         
         # Gain Boost
         ttk.Label(main_frame, text="Gain Boost (1.0-3.0):").grid(row=9, column=0, sticky=tk.W)
-        gain_var = tk.DoubleVar(value=self.config.gain_boost)
-        gain_spin = ttk.Spinbox(main_frame, from_=1.0, to=3.0, increment=0.1, textvariable=gain_var, width=5)
+        gain_spin = ttk.Spinbox(main_frame, from_=1.0, to=3.0, increment=0.1, width=5)
+        gain_spin.set(self.config.gain_boost)
         gain_spin.grid(row=9, column=1, sticky=tk.W)
         
         # Vocabulary Profiles Header
@@ -180,24 +197,27 @@ class TrayIcon:
         prof_list.grid(row=11, column=0, columnspan=2, sticky=tk.EW)
         
         ttk.Label(main_frame, text="Profile Name:").grid(row=12, column=0, sticky=tk.W)
-        prof_name_var = tk.StringVar()
-        ttk.Entry(main_frame, textvariable=prof_name_var).grid(row=12, column=1, sticky=tk.EW)
+        prof_name_entry = ttk.Entry(main_frame)
+        prof_name_entry.grid(row=12, column=1, sticky=tk.EW)
         
         ttk.Label(main_frame, text="Prompt:").grid(row=13, column=0, sticky=tk.W)
-        prof_prompt_var = tk.StringVar(value=self.config.initial_prompt)
-        ttk.Entry(main_frame, textvariable=prof_prompt_var).grid(row=13, column=1, sticky=tk.EW)
+        prof_prompt_entry = ttk.Entry(main_frame)
+        prof_prompt_entry.grid(row=13, column=1, sticky=tk.EW)
+        prof_prompt_entry.insert(0, self.config.initial_prompt)
 
         def on_prof_select(event):
             selection = prof_list.curselection()
             if selection:
                 name = prof_list.get(selection[0])
-                prof_name_var.set(name)
-                prof_prompt_var.set(self.config.vocab_profiles.get(name, ""))
+                prof_name_entry.delete(0, tk.END)
+                prof_name_entry.insert(0, name)
+                prof_prompt_entry.delete(0, tk.END)
+                prof_prompt_entry.insert(0, self.config.vocab_profiles.get(name, ""))
         prof_list.bind('<<ListboxSelect>>', on_prof_select)
 
         def save_profile():
-            name = prof_name_var.get().strip()
-            prompt = prof_prompt_var.get().strip()
+            name = prof_name_entry.get().strip()
+            prompt = prof_prompt_entry.get().strip()
             if name:
                 self.config.vocab_profiles[name] = prompt
                 self.config.apply_profile(name)
@@ -206,7 +226,7 @@ class TrayIcon:
                 self.set_state(self.state)
 
         def delete_profile():
-            name = prof_name_var.get().strip()
+            name = prof_name_entry.get().strip()
             if len(self.config.vocab_profiles) <= 1:
                 messagebox.showwarning("Warning", "Cannot delete the last profile.", parent=root)
                 return
@@ -223,27 +243,42 @@ class TrayIcon:
         ttk.Button(btn_frame, text="Delete Profile", command=delete_profile).pack(side=tk.LEFT, padx=5)
 
         def save():
-            self.config.model_size = model_var.get()
-            self.config.language = lang_var.get()
-            self.config.hotkey = hotkey_var.get()
-            self.config.device = device_var.get()
+            # 1. Capture raw UI value immediately from widgets
+            raw_hotkey = hotkey_entry.get().strip()
+            logging.info(f"Tray: [DEBUG] Widget Hotkey captured: '{raw_hotkey}'")
+            
+            # 2. Assign to config
+            self.config.model_size = model_combo.get()
+            self.config.language = lang_entry.get().strip()
+            self.config.hotkey = raw_hotkey
+            self.config.device = device_combo.get()
             self.config.prepend_space = space_var.get()
             self.config.capitalize_first = cap_var.get()
-            # Update currently typing initial prompt without necessarily saving a profile config under it if one wasn't selected
-            self.config.initial_prompt = prompt_var.get()
+            self.config.initial_prompt = prompt_entry.get().strip()
             try:
-                self.config.gain_boost = float(gain_var.get())
+                self.config.gain_boost = float(gain_spin.get())
             except ValueError:
                 self.config.gain_boost = 1.0
                 
+            # 3. Persist to disk
             self.config.save()
-            messagebox.showinfo("Success", "Settings saved. Restart the app for changes to take effect.", parent=root)
+            logging.info(f"Tray: [DEBUG] Config.save() complete. self.config.hotkey: '{self.config.hotkey}'")
+
+            # 4. Trigger live update
+            if hasattr(self, 'on_hotkey_change') and self.on_hotkey_change:
+                logging.info(f"Tray: [DEBUG] Relaying update to Main: '{self.config.hotkey}'")
+                self.on_hotkey_change(self.config.hotkey)
+
+            messagebox.showinfo("Success", "Settings saved!", parent=root)
             self.set_state(self.state)
             root.destroy()
             
         ttk.Button(main_frame, text="Save All Settings", command=save).grid(row=15, column=0, columnspan=2, pady=10)
         
-        root.mainloop()
+        try:
+            root.mainloop()
+        finally:
+            self._settings_open = False  # Ensure flag resets
 
     def run(self):
         self.icon.run()

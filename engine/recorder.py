@@ -86,7 +86,7 @@ class AudioRecorder:
                 tensor = torch.from_numpy(audio)
                 # Silero expects (batch, samples)
                 sampling_rate = self.config.sample_rate
-                speech_timestamps = self.get_speech_timestamps(tensor, self.model, sampling_rate=sampling_rate)
+                speech_timestamps = self.get_speech_timestamps(tensor, self.model, sampling_rate=sampling_rate, threshold=self.config.vad_threshold)
                 
                 if not speech_timestamps:
                     logging.info("VAD: No speech detected.")

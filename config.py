@@ -24,7 +24,7 @@ class Config:
     language: str = "en"              # None = auto-detect, "en", "hi", "kn", etc.
     device: str = "cpu"               # "cpu" or "cuda"
     compute_type: str = "int8"        # "int8" for CPU, "float16" for CUDA
-    hotkey: str = "<ctrl>+<alt>+<space>"  # pynput format
+    hotkey: str = "ctrl+alt+space"  # keyboard format
     paste_key: str = "ctrl+v"         # "cmd+v" on macOS
     sample_rate: int = 16000
     vad_threshold: float = 0.3        # Silero VAD sensitivity 0.0-1.0
@@ -67,9 +67,14 @@ class Config:
             try:
                 with open(config_file, "r") as f:
                     data = json.load(f)
-                    return cls(**data)
+                    # Filter out keys that aren't valid Config fields to prevent __init__ errors
+                    valid_keys = cls.__dataclass_fields__.keys()
+                    filtered_data = {k: v for k, v in data.items() if k in valid_keys}
+                    config = cls(**filtered_data)
+                    logging.info(f"Config: Loaded from {config_file} (Hotkey: {config.hotkey})")
+                    return config
             except Exception as e:
-                logging.error(f"Failed to load config: {e}")
+                logging.error(f"Config: Failed to load from {config_file}: {e}")
                 
         return cls()
 
@@ -77,11 +82,15 @@ class Config:
         config_dir = Path.home() / ".dictation-app"
         config_file = config_dir / "config.json"
         
+        # Consistent normalization before saving to disk
+        self.hotkey = self.hotkey.replace("<", "").replace(">", "").strip()
+        
         if not config_dir.exists():
             config_dir.mkdir(parents=True)
             
         try:
             with open(config_file, "w") as f:
                 json.dump(asdict(self), f, indent=4)
+            logging.info(f"Config: Saved successfully to {config_file} (Hotkey: {self.hotkey})")
         except Exception as e:
-            logging.error(f"Failed to save config: {e}")
+            logging.error(f"Config: Failed to save to {config_file}: {e}")
