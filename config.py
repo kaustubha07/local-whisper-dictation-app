@@ -49,7 +49,7 @@ class Config:
     
     # --- New features config ---
     min_audio_rms: float = 0.01
-    confirm_timeout: float = 5.0
+    confirm_timeout: float = 15.0
     streaming_timeout: float = 30.0
     negate_phrases: set = field(default_factory=lambda: {
         "cancel that", "never mind", "forget it",
