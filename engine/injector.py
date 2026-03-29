@@ -2,11 +2,14 @@ import time
 import pyperclip
 import keyboard
 import logging
+import win32gui
+import win32con
 from config import Config
 
 class TextInjector:
     def __init__(self, config: Config):
         self.config = config
+        self._target_hwnd = None
 
     def _format_text(self, text: str) -> str:
         """Strip, capitalize and prepend space according to config."""
@@ -20,14 +23,29 @@ class TextInjector:
             
         return text
 
-    def inject(self, text: str) -> bool:
-        """Inject text via clipboard copy-paste."""
+    def save_target_window(self):
+        """Snapshots the current foreground window before overlay takes focus."""
+        self._target_hwnd = win32gui.GetForegroundWindow()
+        logging.debug(f"Saved target HWND: {self._target_hwnd}")
+
+    def inject(self, text: str, overlay_hide_callback=None) -> bool:
+        """
+        Inject text via clipboard copy-paste.
+        If overlay_hide_callback is provided, it's called BEFORE injection
+        to let Windows naturally return focus to the underlying application.
+        """
         if not text:
             return False
             
         formatted_text = self._format_text(text)
         
         try:
+            # Hide the overlay first — this returns focus naturally
+            if overlay_hide_callback:
+                overlay_hide_callback()
+                # 150ms sleep for focus to settle naturally
+                time.sleep(0.15)
+
             # Save current clipboard content
             previous_clipboard = pyperclip.paste()
             

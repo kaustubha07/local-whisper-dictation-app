@@ -7,7 +7,7 @@ from pynput import keyboard as pynput_keyboard
 import keyboard
 from config import Config
 from engine.recorder import AudioRecorder
-from engine.transcriber import Transcriber
+from engine.transcriber import Transcriber, SilentAudioError
 from engine.injector import TextInjector
 from engine.history import HistoryLogger
 from engine.app_watcher import AppWatcher
@@ -31,6 +31,8 @@ class DictationApp:
         self.injector = TextInjector(self.config)
         self.recorder = AudioRecorder(self.config)
         self.transcriber = Transcriber(self.config)
+        self.decision_event = threading.Event()
+        self.confirmed = False
         
         # Use an executor for non-blocking transcription
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -63,6 +65,7 @@ class DictationApp:
 
     def toggle_dictation(self):
         """Global hotkey handler."""
+        self.injector.save_target_window()
         logging.info(f"Main: Hotkey pressed! Current state: {self.state.status}")
         with self.state.lock:
             if self.state.status == "idle":
@@ -97,34 +100,99 @@ class DictationApp:
         self.executor.submit(self._process_audio, audio)
 
     def _process_audio(self, audio):
+        """3-Phase Transcription Pipeline"""
         try:
+            # --- PHASE 1: STREAM ---
+            final_text = ""
             if not self.transcriber.is_ready():
                 self.overlay.show_error("Loading model...")
-                # Try to load again if failed before
                 self.transcriber.load_model()
                 if not self.transcriber.is_ready():
                     self._reset_state_with_error("Model Error")
                     return
 
-            text = self.transcriber.transcribe(audio)
+            try:
+                # Use a generator to get partials
+                generator = self.transcriber.transcribe_stream(audio)
+                start_time = time.time()
+                
+                while True:
+                    # Enforce timeout on Phase 1
+                    if time.time() - start_time > self.config.streaming_timeout:
+                        logging.warning("Main: Phase 1 Timeout (30s)")
+                        self._reset_state_with_error("Timed Out")
+                        return
+
+                    try:
+                        partial_text = next(generator)
+                        self.overlay.show_streaming(partial_text)
+                    except StopIteration as e:
+                        final_text = e.value
+                        break
+            except SilentAudioError:
+                logging.info("Main: Silent audio detected in pipeline.")
+                self._reset_state_with_error("No speech detected")
+                return
+
+            if not final_text:
+                self._reset_state_with_error("No speech detected")
+                return
+
+            # --- PHASE 2: CONFIRM/CANCEL ---
+            self.decision_event.clear()
+            self.confirmed = False
             
-            if text:
-                self.history.log(text)
-                success = self.injector.inject(text)
-                if success:
-                    self.overlay.show_success(text)
+            def on_confirm():
+                self.confirmed = True
+                self.decision_event.set()
+                
+            def on_cancel():
+                self.confirmed = False
+                self.decision_event.set()
+
+            self.overlay.show_pending_confirm(final_text, on_confirm, on_cancel)
+            
+            # Block until user decides or timeout
+            if not self.decision_event.wait(timeout=self.config.confirm_timeout):
+                logging.info("Main: Phase 2 Timeout (Auto-Cancel)")
+                self.confirmed = False
+            
+            # --- PHASE 3: ACT ---
+            if self.confirmed:
+                # Voice Negation Check
+                clean_text = final_text.strip().lower()
+                if any(phrase in clean_text for phrase in self.config.negate_phrases):
+                    logging.info(f"Main: Negation detected in: '{final_text}'")
+                    self.overlay.show_error("Cancelled (Voice)")
                 else:
-                    self.overlay.show_error("Injection Failed")
+                    self.history.log(final_text)
+                    success = self.injector.inject(
+                        final_text, 
+                        overlay_hide_callback=self.overlay.hide_immediately
+                    )
+                    if success:
+                        self.overlay.show_success(final_text)
+                    else:
+                        self.overlay.show_error("Injection Failed")
             else:
-                self.overlay.show_error("No speech detected")
+                logging.info("Main: Confirmation cancelled or timed out.")
+                # We show a neutral status for manual cancel
+                self._reset_state_with_error("Cancelled")
                 
         except Exception as e:
-            logging.error(f"Main processing error: {e}")
-            self.overlay.show_error("Process Error")
+            logging.error(f"Main pipeline error: {e}", exc_info=True)
+            self._reset_state_with_error("Error")
         finally:
-            with self.state.lock:
-                self.state.status = "idle"
+            self._reset_state()
+
+    def _reset_state(self):
+        """Idempotent cleanup of app state."""
+        with self.state.lock:
+            self.state.status = "idle"
+            if hasattr(self, 'tray'):
                 self.tray.set_state("idle")
+            # Clear events
+            self.decision_event.set() 
 
     def _reset_state_with_error(self, msg):
         with self.state.lock:

@@ -46,6 +46,15 @@ class Config:
         "pycharm64": "Coding",
         "winword": "Medical"
     })
+    
+    # --- New features config ---
+    min_audio_rms: float = 0.01
+    confirm_timeout: float = 15.0
+    streaming_timeout: float = 30.0
+    negate_phrases: set = field(default_factory=lambda: {
+        "cancel that", "never mind", "forget it",
+        "discard", "nope", "don't inject", "abort"
+    })
 
     def apply_profile(self, name: str) -> bool:
         """Applies a vocabulary profile without saving to disk immediately to prevent spam writes."""
